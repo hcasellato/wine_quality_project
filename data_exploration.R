@@ -11,14 +11,18 @@
 # Creation of train and test sets
 # Required functions for further exploration
 
+repo <- "http://cran.us.r-project.org"
+
 # Required packages:
 if(!require(tidyverse))      install.packages("tidyverse",      repos = repo)
 if(!require(caret))          install.packages("caret",          repos = repo)
 if(!require(data.table))     install.packages("data.table",     repos = repo)
+if(!require(h2o))           install.packages("h2o",          repos = repo)
 
 library(tidyverse)
 library(caret)
 library(data.table)
+library(h2o)
 
 # Check if the red and white wine required data sets are available, otherwise
 # downloading them :)
@@ -51,7 +55,7 @@ if(!exists("red_wine_general") &
   white_general <- red_wine[-white_test_index,]
   white_validation <- red_wine[white_test_index,]
   
-  rm(red_wine, red_test_index, white_wine, white_test_index)
+  rm(dl, red_wine, red_test_index, white_wine, white_test_index)
 }
 gc()
 
@@ -123,8 +127,48 @@ red_general %>% ggplot(aes(quality)) +
                 ylab("Number of Wines") +
                 theme_rw()
 
-# Visualization of correlation and outliers:
+# Visualization of quality correlation and outliers:
 lapply(c(1:11), plot_gen, data = red_general)
+
+# Correlation data
+red_cor <- cor(red_general)[,12]
+
+# Proportion
+prop.table(table(red_general$quality))
+
+# Anomaly detection with h2o ISOLATION FOREST
+
+localH2O <- h2o.init(ip="localhost", port = 54321, 
+                     startH2O = TRUE, nthreads=-1)
+
+setwd(getwd())
+red_general[,12] <- as.factor(red_general[,12])
+write.csv(red_general, "red_general.csv")
+h2o_rg <- h2o.importFile("red_general.csv")
+
+rg_dl <- h2o.deeplearning(x=names(red_general)[1:11],
+                          training_frame = h2o_rg,
+                          autoencoder = TRUE,
+                          activation = "Tanh",
+                          hidden = c(10,10,10,10),
+                          epochs = 100,
+                          seed = 2021)
+anomaly <- h2o.anomaly(rg_dl, h2o_rg)
+row_anomaly <- which(anomaly > 0.99)
+      
+isoforest <- h2o.isolationForest(training_frame = h2o_rg,
+                                 sample_rate = 0.1,
+                                 max_depth = 20,
+                                 ntrees = 50)
+
+tred_general <- red_general
+
+score <- h2o.predict(isoforest, h2o_rg)
+result_pred <- as.vector(score$predict)
+threshold <- .97
+scoreLimit = round( quantile( result_pred, threshold ), 4 )
+tred_general = cbind( RowScore = round( result_pred, 4 ), tred_general )
+anomalies = tred_general[ tred_general$RowScore > scoreLimit, ]
 
 ### White wine set!!!
 # Visual distribution of ratings:
@@ -137,5 +181,8 @@ white_general %>% ggplot(aes(quality)) +
 
 # Visualization of correlation and outliers:
 lapply(c(1:11), plot_gen, data = white_general)
+
+# Correlation data
+white_cor <- cor(white_general)
 
 ################################################################################
